@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.turbo/
+*.log
+install_log.txt
+.n8n/
+.env
