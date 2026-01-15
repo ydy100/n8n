@@ -29,24 +29,38 @@ $btnRegister.Size = New-Object System.Drawing.Size(330, 45)
 $btnRegister.BackColor = [System.Drawing.Color]::LightGreen
 $btnRegister.Add_Click({
     try {
-        # 1. 기존 pm2-windows-startup 방식 해제 (충돌 방지)
-        if (Get-Command pm2-startup -ErrorAction SilentlyContinue) {
-            pm2-startup uninstall | Out-Null
+        # 1. PM2 실행 파일의 전체 경로 확보 (가장 중요)
+        $pm2Path = (Get-Command pm2.cmd -ErrorAction SilentlyContinue).Source
+        if (-not $pm2Path) {
+            $pm2Path = "$env:AppData\npm\pm2.cmd"
         }
 
-        # 2. 무음 실행을 위한 VBS 스크립트 생성
+        # 2. 기존의 모든 PM2 관련 자동 실행 항목 제거 (충돌 방지)
+        $regPath = "Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run"
+        $oldNames = @("PM2", "pm2", "n8n-PM2-Silent")
+        foreach ($name in $oldNames) {
+            if (Get-ItemProperty -Path $regPath -Name $name -ErrorAction SilentlyContinue) {
+                Remove-ItemProperty -Path $regPath -Name $name -Force
+            }
+        }
+
+        # 3. 무음 실행을 위한 VBS 스크립트 생성 (절대 경로 사용)
         $vbsPath = "C:\n8n\n8n-resurrect.vbs"
-        $vbsContent = 'Set WshShell = CreateObject("WScript.Shell")' + "`r`n" + 'WshShell.Run "cmd /c pm2 resurrect", 0, False'
+        $vbsContent = "Set WshShell = CreateObject(`"WScript.Shell`")" + "`r`n" + `
+                      "WshShell.Run `"cmd /c `"`"$pm2Path`"`" resurrect`", 0, False"
         $vbsContent | Out-File -FilePath $vbsPath -Encoding ascii -Force
 
-        # 3. 레지스트리에 등록 (사용자 시작 프로그램)
-        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        # 4. 레지스트리에 새로 등록
         Set-ItemProperty -Path $regPath -Name "n8n-PM2-Silent" -Value "wscript.exe `"$vbsPath`""
 
-        # 4. 현재 상태 저장
-        pm2 save
+        # 5. 현재 PM2 상태 저장
+        if (Test-Path $pm2Path) {
+            & $pm2Path save
+        } else {
+            pm2 save
+        }
 
-        [System.Windows.Forms.MessageBox]::Show("창 없는 자동 실행 등록이 완료되었습니다!`n`n이제 재부팅 시 검은 창이 나타나지 않습니다.", "성공")
+        [System.Windows.Forms.MessageBox]::Show("창 없는 자동 실행 등록이 완료되었습니다!`n`n이제 재부팅 시 검은 창 없이 n8n이 백그라운드에서 실행됩니다.", "성공")
     } catch {
         [System.Windows.Forms.MessageBox]::Show("오류 발생: $($_.Exception.Message)", "오류")
     }
@@ -60,20 +74,24 @@ $btnUnregister.Size = New-Object System.Drawing.Size(330, 45)
 $btnUnregister.BackColor = [System.Drawing.Color]::LightPink
 $btnUnregister.Add_Click({
     try {
-        # 레지스트리 삭제
-        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-        if (Get-ItemProperty -Path $regPath -Name "n8n-PM2-Silent" -ErrorAction SilentlyContinue) {
-            Remove-ItemProperty -Path $regPath -Name "n8n-PM2-Silent"
+        # 1. 모든 관련 레지스트리 항목 삭제
+        $regPath = "Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run"
+        $oldNames = @("PM2", "pm2", "n8n-PM2-Silent")
+        foreach ($name in $oldNames) {
+            if (Get-ItemProperty -Path $regPath -Name $name -ErrorAction SilentlyContinue) {
+                Remove-ItemProperty -Path $regPath -Name $name -Force
+            }
         }
 
-        # 기존 패키지 방식도 혹시 있으면 삭제
+        # 2. 기존 패키지 방식(pm2-startup) 해제 시도
         if (Get-Command pm2-startup -ErrorAction SilentlyContinue) {
             pm2-startup uninstall | Out-Null
         }
 
-        # VBS 파일 삭제
-        if (Test-Path "C:\n8n\n8n-resurrect.vbs") {
-            Remove-Item "C:\n8n\n8n-resurrect.vbs" -Force
+        # 3. VBS 파일 삭제
+        $vbsPath = "C:\n8n\n8n-resurrect.vbs"
+        if (Test-Path $vbsPath) {
+            Remove-Item $vbsPath -Force
         }
 
         [System.Windows.Forms.MessageBox]::Show("자동 실행 설정이 완전히 해제되었습니다.", "완료")
