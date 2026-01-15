@@ -1,4 +1,4 @@
-﻿# 실행 정책 및 출력 인코딩 설정
+# 실행 정책 및 출력 인코딩 설정
 if ((Get-ExecutionPolicy) -ne 'RemoteSigned') {
     Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process -Force
 }
@@ -23,16 +23,30 @@ $label.Size = New-Object System.Drawing.Size(400, 40)
 $form.Controls.Add($label)
 
 $btnRegister = New-Object System.Windows.Forms.Button
-$btnRegister.Text = "자동 실행 등록 (Register)"
+$btnRegister.Text = "자동 실행 등록 (Silent Register)"
 $btnRegister.Location = New-Object System.Drawing.Point(50, 80)
 $btnRegister.Size = New-Object System.Drawing.Size(330, 45)
 $btnRegister.BackColor = [System.Drawing.Color]::LightGreen
 $btnRegister.Add_Click({
     try {
-        npm install -g pm2-windows-startup
-        pm2-startup install
+        # 1. 기존 pm2-windows-startup 방식 해제 (충돌 방지)
+        if (Get-Command pm2-startup -ErrorAction SilentlyContinue) {
+            pm2-startup uninstall | Out-Null
+        }
+
+        # 2. 무음 실행을 위한 VBS 스크립트 생성
+        $vbsPath = "C:\n8n\n8n-resurrect.vbs"
+        $vbsContent = 'Set WshShell = CreateObject("WScript.Shell")' + "`r`n" + 'WshShell.Run "cmd /c pm2 resurrect", 0, False'
+        $vbsContent | Out-File -FilePath $vbsPath -Encoding ascii -Force
+
+        # 3. 레지스트리에 등록 (사용자 시작 프로그램)
+        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        Set-ItemProperty -Path $regPath -Name "n8n-PM2-Silent" -Value "wscript.exe `"$vbsPath`""
+
+        # 4. 현재 상태 저장
         pm2 save
-        [System.Windows.Forms.MessageBox]::Show("자동 실행 등록이 완료되었습니다!", "성공")
+
+        [System.Windows.Forms.MessageBox]::Show("창 없는 자동 실행 등록이 완료되었습니다!`n`n이제 재부팅 시 검은 창이 나타나지 않습니다.", "성공")
     } catch {
         [System.Windows.Forms.MessageBox]::Show("오류 발생: $($_.Exception.Message)", "오류")
     }
@@ -46,8 +60,23 @@ $btnUnregister.Size = New-Object System.Drawing.Size(330, 45)
 $btnUnregister.BackColor = [System.Drawing.Color]::LightPink
 $btnUnregister.Add_Click({
     try {
-        pm2-startup uninstall
-        [System.Windows.Forms.MessageBox]::Show("자동 실행 설정이 해제되었습니다.", "완료")
+        # 레지스트리 삭제
+        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        if (Get-ItemProperty -Path $regPath -Name "n8n-PM2-Silent" -ErrorAction SilentlyContinue) {
+            Remove-ItemProperty -Path $regPath -Name "n8n-PM2-Silent"
+        }
+
+        # 기존 패키지 방식도 혹시 있으면 삭제
+        if (Get-Command pm2-startup -ErrorAction SilentlyContinue) {
+            pm2-startup uninstall | Out-Null
+        }
+
+        # VBS 파일 삭제
+        if (Test-Path "C:\n8n\n8n-resurrect.vbs") {
+            Remove-Item "C:\n8n\n8n-resurrect.vbs" -Force
+        }
+
+        [System.Windows.Forms.MessageBox]::Show("자동 실행 설정이 완전히 해제되었습니다.", "완료")
     } catch {
         [System.Windows.Forms.MessageBox]::Show("오류 발생: $($_.Exception.Message)", "오류")
     }
@@ -61,13 +90,13 @@ $btnStatus.Size = New-Object System.Drawing.Size(330, 45)
 $btnStatus.Add_Click({
     # PM2 출력을 표 형식으로 가져오기
     $status = pm2 status --no-color | Out-String
-    
+
     # 결과 폼 생성
     $statusForm = New-Object System.Windows.Forms.Form
     $statusForm.Text = "PM2 프로세스 상태 (표 형식)"
     $statusForm.Size = New-Object System.Drawing.Size(1200, 500)
     $statusForm.StartPosition = "CenterParent"
-    
+
     $textBox = New-Object System.Windows.Forms.TextBox
     $textBox.Multiline = $true
     $textBox.ReadOnly = $true
@@ -76,13 +105,13 @@ $btnStatus.Add_Click({
     $textBox.Dock = "Fill"
     $textBox.Font = New-Object System.Drawing.Font("Consolas", 10)
     $textBox.Text = $status
-    
+
     # 자동 선택 해제: 포커스를 텍스트 박스에서 제거하거나 선택 영역을 초기화
     $statusForm.Add_Shown({
         $textBox.SelectionLength = 0
         $statusForm.ActiveControl = $null
     })
-    
+
     $statusForm.Controls.Add($textBox)
     $statusForm.ShowDialog()
 })
